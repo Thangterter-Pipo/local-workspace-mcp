@@ -1,0 +1,36 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs & Runtime State
+*.log
+audit.jsonl
+*.lock
+.lock
+*.pid
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+
+# OS Metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Archives & Temp
+*.zip
+*.tar.gz
