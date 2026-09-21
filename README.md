@@ -1,175 +1,229 @@
-# Local Workspace MCP (Cross-Platform)
+# Local Workspace MCP 🖥️⚡
 
-> **Máy chủ Model Context Protocol (MCP) đa nền tảng** dành cho **ChatGPT Web**, **Claude Code**, **Cursor** và các MCP client khác, hỗ trợ đầy đủ cả **Windows** và **macOS / Linux**.
+<p align="center">
+  <b>Give ChatGPT Web full control over your local computer (Windows & macOS).</b><br>
+  <i>Secure cross-platform Model Context Protocol (MCP) server empowering ChatGPT Web to inspect drives, read & edit files, execute terminal commands, and manage background processes directly from <a href="https://chatgpt.com">chatgpt.com</a>.</i>
+</p>
 
----
-
-## 1. Giới thiệu tổng quan
-
-Local Workspace MCP cung cấp cho AI khả năng tương tác trực tiếp với toàn bộ máy tính (filesystem, command line, process manager, git, CDP browser) một cách an toàn, minh bạch và có kiểm soát, vận hành trực tiếp dưới quyền của tài khoản người dùng hiện tại (Current User ACLs).
-
-### Điểm nổi bật
-- **Hỗ trợ đa nền tảng (Cross-Platform)**:
-  - **Windows**: Tự động nhận diện tất cả các ổ đĩa (`C:\`, `D:\`, `E:\`...), hỗ trợ PowerShell/CMD, đường dẫn Windows.
-  - **macOS / Linux**: Hỗ trợ đường dẫn POSIX (`/Users/...`, `~/...`, `/Volumes/...`), shell Bash/Zsh.
-- **Chuẩn giao thức FastMCP 3.x**:
-  - Streamable HTTP tại `/mcp` với quản lý session stateful (`Mcp-Session-Id`).
-  - Tích hợp chuẩn **OAuth 2.1 Authorization Code + PKCE** và **Dynamic Client Registration (DCR)** theo khuyến nghị của OpenAI cho Custom MCP Connectors.
-  - Hỗ trợ bảo mật 2 lớp qua **Consent PIN** tại giao diện `/consent`.
-- **Hệ thống hơn 65+ công cụ mạnh mẽ**:
-  - Quản lý tệp & thư mục: Đọc, ghi, sửa phân đoạn (`patch_file`, `replace_text`, `insert_text`), tìm kiếm nội dung (ripgrep/regex), giải nén an toàn chống zip-slip.
-  - Thực thi lệnh (`exec_command`): Thực thi bất kỳ CLI nào với timeout và giới hạn dung lượng output.
-  - Quản lý tiến trình ngầm (`process_manager`): Bật tác vụ dài, theo dõi stdout/stderr bounded buffer, dừng tiến trình sạch sẽ khi tắt server.
-  - Git & kiểm thử tự động: `git status`, `git diff`, `git log`, `run_pytest`, `run_python_script`.
-  - CDP / Browser Automation: Điều khiển trình duyệt qua Chrome DevTools Protocol.
+<p align="center">
+  <a href="#english-documentation">English</a> •
+  <a href="#tiếng-việt">Tiếng Việt</a> •
+  <a href="SETUP_WINDOWS.md">Setup Windows</a> •
+  <a href="SETUP_MAC.md">Setup macOS</a> •
+  <a href="docs/CHATGPT_SETUP.md">ChatGPT Setup Guide</a>
+</p>
 
 ---
 
-## 2. Kiến trúc hệ thống (Architecture)
+## English Documentation
+
+### 1. Overview & The Problem Solved
+By default, **ChatGPT Web** runs isolated in OpenAI's cloud environment. It has no access to your local machine, cannot see your drives, cannot edit project files in place, and cannot run terminal commands. Developers are forced to constantly copy and paste code back and forth.
+
+**Local Workspace MCP** eliminates this friction. It implements the OpenAI Custom MCP Connector standard (OAuth 2.1 + PKCE + Dynamic Client Registration) to establish a secure, bidirectional bridge between **`chatgpt.com`** and your local operating system.
+
+#### Key Features:
+- **Full-Machine & Multi-Drive Access**:
+  - **Windows**: Automatically detects and browses all drives (`C:\`, `D:\`, `E:\`...), verifies free space, and resolves Windows paths.
+  - **macOS / Linux**: Full support for POSIX paths (`/Users/...`, `~/...`, `/Volumes/...` for external drives), and resolves relative paths against the current working directory.
+- **Intelligent File & Code Editing**:
+  - Read large files with offsets, search codebases with regex/ripgrep, patch lines, replace text blocks, and create directories.
+  - Zip-slip protection ensures archives cannot extract files outside destination folders.
+- **Terminal & Process Execution**:
+  - Execute commands (`exec_command`) with timeout limits and output buffer caps.
+  - Spawn long-running background processes (`process_manager`) with ring buffers for real-time monitoring and graceful termination.
+- **Security & Privacy by Design**:
+  - **OAuth 2.1 + PKCE with Owner Consent PIN**: When ChatGPT connects, you must enter your private `WORKSPACE_MCP_CONSENT_PIN` on the local `/consent` web page to authorize access.
+  - **OS-Level Permissions (Current User ACLs)**: Runs under your user account with zero privilege escalation.
+  - **Secret Redaction**: Environment variable inspection automatically masks tokens, keys, and passwords with `<redacted>`.
+  - **Audit Logging**: All tool actions are recorded locally in `audit.jsonl` without logging sensitive file contents or secrets.
+
+---
+
+### 2. Architecture
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
-│             ChatGPT Web / Claude / Cursor               │
+│                       chatgpt.com                        │
+│             (ChatGPT Web Custom Connector)               │
 └────────────────────────────┬─────────────────────────────┘
-                             │ HTTPS (OAuth 2.1 / Bearer)
+                             │ HTTPS (OAuth 2.1 + PKCE)
                              ▼
 ┌──────────────────────────────────────────────────────────┐
-│ Public Endpoint (Cloudflare Tunnel / SSH Reverse / ngrok)│
-│ e.g. https://mcp.yourdomain.com                          │
+│ Public HTTPS Tunnel (Cloudflare Quick Tunnel / ngrok /   │
+│ SSH Reverse Tunnel)  e.g. https://mcp.yourdomain.com     │
 └────────────────────────────┬─────────────────────────────┘
                              │ HTTP (Port 3080)
                              ▼
 ┌──────────────────────────────────────────────────────────┐
-│                 Local Workspace MCP                       │
-│  - FastMCP Streamable HTTP (/mcp)                        │
-│  - OAuth Provider & Consent PIN (/authorize, /token)     │
-│  - Path Normalizer (security/paths.py)                   │
-│  - JSONL Audit Logger (security/audit.py)                │
-│  - Process Manager (services/process_manager.py)         │
+│                 Local Workspace MCP                      │
+│  - FastMCP Streamable HTTP Engine (/mcp)                 │
+│  - OAuth 2.1 & Web Consent Screen (/consent)             │
+│  - Cross-Platform Path Normalizer (security/paths.py)    │
+│  - Process Lifecycle Manager (services/process_manager)  │
+│  - Local Audit Logger (security/audit.py)                │
 └────────────────────────────┬─────────────────────────────┘
                              │
             ┌────────────────┴────────────────┐
             ▼                                 ▼
-      Hệ điều hành Windows            Hệ điều hành macOS / Linux
-  - Ổ đĩa: C:\, D:\, E:\...         - Đường dẫn: /, /Users, ~/
+       Windows Desktop                  macOS Desktop
+  - Drives: C:\, D:\, E:\...        - Mounts: /, /Users, /Volumes
   - Shell: PowerShell / cmd.exe     - Shell: /bin/zsh, /bin/bash
-  - Tiến trình: taskkill, Win32     - Tiến trình: POSIX signals
+  - Processes: Win32 process group  - Processes: POSIX process group
 ```
 
 ---
 
-## 3. Cấu hình biến môi trường (`.env`)
+### 3. Environment Variables (`.env`)
 
-Sao chép `.env.example` thành `.env` tại thư mục gốc của server và điền các thông tin:
+Copy `.env.example` to `.env` in the root folder:
 
-| Biến môi trường | Bắt buộc | Mặc định | Mô tả |
+| Variable | Required | Default | Description |
 |---|:---:|:---:|---|
-| `WORKSPACE_MCP_API_KEY` | **Có** | - | Khóa API bí mật dùng xác thực Bearer token trên `/mcp` cho các MCP client (Claude, Cursor, curl). |
-| `WORKSPACE_MCP_CONSENT_PIN` | **Có** | - | Mã PIN xác thực khi liên kết ChatGPT Web qua OAuth. Bạn nhập mã PIN này trên trang `/consent`. |
-| `PUBLIC_URL` | **Có** (cho OAuth) | - | URL công khai của server (ví dụ: `https://mcp.yourdomain.com`). Bắt buộc cho ChatGPT OAuth callback. |
-| `WORKSPACE_MCP_HOST` | Không | `127.0.0.1` | Địa chỉ IP server lắng nghe tại máy local. |
-| `WORKSPACE_MCP_PORT` | Không | `3080` | Cổng HTTP của server. |
-| `ALLOWED_ROOTS` | Không | Cwd | Giới hạn thư mục được phép thao tác. Để trống để nhận diện theo thư mục làm việc hiện tại. |
-| `COMMAND_TIMEOUT_SECONDS` | Không | `120` | Giới hạn thời gian tối đa cho mỗi lệnh `exec_command` (giây). |
-| `MAX_COMMAND_OUTPUT_MB` | Không | `50` | Giới hạn dung lượng output tối đa cho mỗi lệnh (MB). |
-| `MAX_FILE_READ_MB` | Không | `100` | Giới hạn dung lượng tối đa khi đọc tệp (MB). |
-| `WORKSPACE_MCP_SSH_HOST` | Không | - | Tùy chọn SSH host nếu dùng tính năng tự động mở SSH reverse tunnel trong supervisor. |
+| `WORKSPACE_MCP_API_KEY` | **Yes** | - | Secret Bearer token for HTTP authentication. |
+| `WORKSPACE_MCP_CONSENT_PIN` | **Yes** | - | Private PIN entered on `/consent` during ChatGPT Web pairing. |
+| `PUBLIC_URL` | **Yes** (OAuth) | - | Public HTTPS URL (e.g. Cloudflare tunnel) required for ChatGPT OAuth discovery and callbacks. |
+| `WORKSPACE_MCP_HOST` | No | `127.0.0.1` | Local bind address. |
+| `WORKSPACE_MCP_PORT` | No | `3080` | Local port. |
+| `WORKSPACE_MCP_ROOT` | No | Current dir | Default root workspace directory. |
+| `COMMAND_TIMEOUT_SECONDS` | No | `120` | Max execution time per command. |
+| `MAX_COMMAND_OUTPUT_MB` | No | `50` | Output buffer cap for commands. |
+| `MAX_FILE_READ_MB` | No | `100` | Max size when reading single files. |
+
+*(Legacy `FLOW_VEO_MCP_*` variable names remain supported as backward-compatible fallbacks).*
 
 ---
 
-## 4. An toàn & Bảo mật (Security Model)
+### 4. 3-Step Quick Start
 
-1. **Phân quyền cấp hệ điều hành (No Privilege Escalation)**:
-   - Server chạy dưới quyền của tài khoản người dùng hiện tại; OS sẽ từ chối nếu thao tác vượt quá quyền hạn (ACLs).
-2. **Chuẩn hóa đường dẫn & chống Zip-Slip**:
-   - Mọi đường dẫn đều được chuẩn hóa qua `security/paths.py`, triệt tiêu `..`, NUL bytes và các tên thiết bị cấm trên Windows (`CON`, `PRN`, `AUX`, `NUL`...).
-   - Giải nén file nén kiểm tra nghiêm ngặt đích đến, ngăn chặn ghi đè ra ngoài thư mục cho phép.
-3. **Nhật ký kiểm toán an toàn (JSONL Audit Log)**:
-   - Mọi thao tác công cụ đều được ghi nhận vào `audit.jsonl` (Windows: `%LOCALAPPDATA%\LocalWorkspaceMCP\audit.jsonl`, macOS: `~/.local_workspace_mcp/audit.jsonl`).
-   - Tự động lọc bỏ bí mật, token, mật khẩu; không ghi nội dung file hay thông tin nhạy cảm vào log.
-4. **Dọn dẹp tiến trình (Clean Shutdown)**:
-   - Khi server hoặc supervisor dừng, toàn bộ tiến trình con đang chạy ngầm sẽ được dọn dẹp để tránh tiến trình mồ côi (zombies).
-
----
-
-## 5. Khởi động nhanh (Quick Start)
-
-### Trên Windows
-Xem chi tiết tại [SETUP_WINDOWS.md](SETUP_WINDOWS.md).
+#### On Windows
+See detailed guide: [SETUP_WINDOWS.md](SETUP_WINDOWS.md).
 ```cmd
-:: 1. Chạy script cài đặt tự động
+:: 1. Automated installation
 scripts\install.bat
 
-:: 2. Tạo cấu hình .env
+:: 2. Configure environment
 copy .env.example .env
 
-:: 3. Khởi động server
+:: 3. Run server
 run.bat
-:: Hoặc chạy ngầm vĩnh viễn với supervisor:
+:: Or start as a persistent background supervisor:
 start_supervisor.bat
 ```
 
-### Trên macOS
-Xem chi tiết tại [SETUP_MAC.md](SETUP_MAC.md).
+#### On macOS
+See detailed guide: [SETUP_MAC.md](SETUP_MAC.md).
 ```bash
-# 1. Cấp quyền và chạy cài đặt
+# 1. Grant permissions and install
 chmod +x scripts/*.sh *.sh
 ./scripts/install.sh
 
-# 2. Tạo cấu hình .env
+# 2. Configure environment
 cp .env.example .env
 
-# 3. Khởi động server
+# 3. Run server
 ./run.sh
-# Hoặc chạy ngầm vĩnh viễn với supervisor:
+# Or start as a persistent background supervisor:
 ./start_supervisor.sh
 ```
 
 ---
 
-## 6. Hướng dẫn kết nối Client
+### 5. Connecting with ChatGPT Web
 
-### A. Kết nối với ChatGPT Web (Custom MCP Connector)
-
-1. Mở **ChatGPT Web** → vào **Settings** → **Connected apps** / **Connectors** → Chọn **Add connector (Custom MCP)**.
-2. Nhập thông tin:
+1. Open **[ChatGPT](https://chatgpt.com)** → Click your Profile (bottom left) → **Settings** → **Connected apps** / **Connectors**.
+2. Click **Add connector (Custom MCP)**.
+3. Fill in the connector details:
    - **Name**: `Local Workspace`
-   - **Server URL**: `https://<ten-mien-cua-ban>/mcp`
-   - **Authentication**: Chọn **OAuth** → chọn Advanced nếu cần xem endpoint. Server tự quảng bá metadata tại `/.well-known/oauth-authorization-server`.
-3. Nhấn **Connect**. Trình duyệt sẽ mở trang `/consent`. Nhập mã `WORKSPACE_MCP_CONSENT_PIN` đã thiết lập trong `.env` và bấm **Authorize**.
-4. ChatGPT hoàn tất xác thực và quét được toàn bộ hơn 65 công cụ. Mở đoạn chat mới và yêu cầu:
-   > *"Kiểm tra danh sách ổ đĩa và thư mục trên máy tính của tôi."*
-
-### B. Kết nối với Claude Code
-
-```bash
-claude mcp add --transport http local-workspace https://<ten-mien-cua-ban>/mcp \
-  --header "Authorization: Bearer <WORKSPACE_MCP_API_KEY>"
-```
-
-### C. Kết nối với Cursor
-
-Thêm vào cấu hình MCP trong settings của Cursor (`cursor-settings`):
-```json
-{
-  "mcpServers": {
-    "local-workspace": {
-      "url": "https://<ten-mien-cua-ban>/mcp",
-      "headers": {
-        "Authorization": "Bearer <WORKSPACE_MCP_API_KEY>"
-      }
-    }
-  }
-}
-```
+   - **Server URL**: `https://<your-public-url>/mcp`
+   - **Authentication**: Select **OAuth** (Advanced options will automatically discover endpoints via `/.well-known/oauth-authorization-server`).
+4. Click **Connect**. Your browser will open the `/consent` authorization page.
+5. Enter your `WORKSPACE_MCP_CONSENT_PIN` (set in `.env`) and click **Authorize**.
+6. ChatGPT will verify credentials and register all 65+ tools.
+7. Open a new chat in ChatGPT, enable the **Local Workspace** connector, and prompt:
+   > *"Check all available disk drives and list my current project folder."*
 
 ---
 
-## 7. Kiểm thử tự động (Testing)
+## Tiếng Việt
 
-Chạy bộ test đa nền tảng để kiểm tra toàn vẹn mã nguồn:
+### 1. Giới thiệu & Vấn đề giải quyết
+Mặc định, **ChatGPT Web** chạy hoàn toàn trên đám mây của OpenAI (`chatgpt.com`). Nó bị cô lập khỏi máy tính cá nhân của bạn: không thể đọc ổ đĩa, không thể mở file code trong máy, không thể chạy thử lệnh terminal và bạn phải liên tục copy/paste qua lại rất mất thời gian.
+
+**Local Workspace MCP** ra đời để giải quyết triệt để vấn đề này. Dự án tuân thủ chuẩn Custom MCP Connector của OpenAI (OAuth 2.1 + PKCE + Dynamic Client Registration), đóng vai trò là cây cầu nối bảo mật 2 chiều biến ChatGPT Web thành một trợ lý kỹ thuật có thể trực tiếp thao tác trên máy tính của bạn.
+
+#### Ưu điểm nổi bật:
+- **Truy cập toàn diện hệ thống (Full-Machine)**:
+  - **Windows**: Tự động nhận diện mọi ổ đĩa (`C:\`, `D:\`, `E:\`...), kiểm tra dung lượng trống, hỗ trợ đường dẫn Windows.
+  - **macOS / Linux**: Nhận diện cây thư mục POSIX (`/Users/...`, `~/...`, `/Volumes/...` cho các ổ cứng gắn ngoài), tự động resolve đường dẫn tương đối (`.` hay thư mục con) theo thư mục làm việc hiện tại.
+- **Thao tác đọc, sửa mã nguồn thông minh**:
+  - Đọc file lớn theo phân trang, tìm kiếm mã nguồn bằng regex, vá từng dòng code (`patch_file`), thay thế khối văn bản (`replace_text`).
+  - Kiểm tra chống Zip-Slip nghiêm ngặt khi giải nén tệp.
+- **Thực thi dòng lệnh & Quản lý tiến trình ngầm**:
+  - Chạy lệnh (`exec_command`) với cơ chế kiểm soát timeout và giới hạn bộ đệm output.
+  - Quản lý các tác vụ dài hạn (`process_manager`) có bộ đệm vòng chống tràn RAM, tự động dọn dẹp sạch sẽ khi tắt server (không để lại tiến trình rác).
+- **Bảo mật đa tầng**:
+  - **Xác thực OAuth 2.1 + Consent PIN**: Khi ChatGPT kết nối, bạn phải nhập mã PIN riêng (`WORKSPACE_MCP_CONSENT_PIN`) trên trang xác thực `/consent` mới cấp quyền.
+  - **Giữ nguyên quyền người dùng (User ACLs)**: Không nâng quyền, không bypass quyền hạn bảo mật của hệ điều hành.
+  - **Ẩn thông tin nhạy cảm**: Công cụ đọc biến môi trường tự động ẩn các key, token, password nhạy cảm thành `<redacted>`.
+  - **Nhật ký kiểm toán an toàn (`audit.jsonl`)**: Ghi lại mọi lệnh AI thực hiện trên máy mà không làm rò rỉ nội dung file hay secret.
+
+---
+
+### 2. Hướng dẫn thiết lập nhanh 3 bước
+
+#### Dành cho Windows
+Xem chi tiết tại [SETUP_WINDOWS.md](SETUP_WINDOWS.md).
+1. Nhấp đúp hoặc chạy lệnh: `scripts\install.bat` (tự động tạo `.venv` và cài thư viện).
+2. Sao chép `.env.example` thành `.env` và đặt `WORKSPACE_MCP_CONSENT_PIN` cùng `WORKSPACE_MCP_API_KEY`.
+3. Mở public URL bằng Cloudflare Tunnel:
+   ```cmd
+   cloudflared tunnel --url http://127.0.0.1:3080
+   ```
+   Điền link tunnel vào `PUBLIC_URL` trong `.env`.
+4. Chạy server: `run.bat` (hoặc chạy nền với `start_supervisor.bat`).
+
+#### Dành cho macOS
+Xem chi tiết tại [SETUP_MAC.md](SETUP_MAC.md).
+1. Mở Terminal và chạy:
+   ```bash
+   chmod +x scripts/*.sh *.sh
+   ./scripts/install.sh
+   ```
+2. Sao chép `.env.example` thành `.env` và cấu hình PIN/Key.
+3. Mở tunnel và cập nhật `PUBLIC_URL` trong `.env`.
+4. Chạy server: `./run.sh` (hoặc chạy nền với `./start_supervisor.sh`).
+
+---
+
+### 3. Kết nối với ChatGPT Web
+
+1. Truy cập **[ChatGPT](https://chatgpt.com)** → Bấm vào Avatar tài khoản (góc dưới bên trái) → **Settings** → **Connected apps** (hoặc **Connectors**).
+2. Bấm **Add connector (Custom MCP)**.
+3. Điền thông số kết nối:
+   - **Name**: `Local Workspace`
+   - **Server URL**: `https://<link-cloudflare-tunnel-cua-ban>/mcp`
+   - **Authentication**: Chọn **OAuth**.
+4. Bấm **Connect**. Trình duyệt sẽ tự động mở trang web xác thực `/consent`.
+5. Nhập mã PIN bạn đã đặt trong `WORKSPACE_MCP_CONSENT_PIN` và bấm **Authorize (Cho phép)**.
+6. ChatGPT sẽ kết nối thành công và nạp hơn 65 công cụ. Mở một phiên chat mới, bật connector **Local Workspace** và bắt đầu trải nghiệm!
+
+---
+
+### 4. Kiểm thử tự động (Automated Testing)
+
+Chạy bộ kiểm thử đa nền tảng để kiểm tra toàn vẹn mã nguồn:
 ```bash
-# Chạy bộ test cross-platform
 python test/test_crossplatform.py
 ```
-Bộ test tự động kiểm tra cú pháp AST toàn bộ codebase, logic chuẩn hóa đường dẫn Windows/POSIX, danh sách ổ đĩa `get_roots()` và định vị lệnh `which_command()`.
+Bộ test tự động xác thực:
+1. Cú pháp AST của toàn bộ mã nguồn Python.
+2. Logic chuẩn hóa đường dẫn trên cả Windows và POSIX (macOS).
+3. Nhận diện danh sách ổ đĩa và tính toán dung lượng (`get_roots`).
+4. Tìm kiếm ứng dụng hệ thống (`which_command`).
+5. Che giấu an toàn các biến môi trường nhạy cảm (`get_environment`).
+
+---
+
+## Giấy phép / License
+Phát hành theo giấy phép mã nguồn mở MIT License. Tự do sử dụng, chỉnh sửa và đóng góp cho cộng đồng.
